@@ -1,12 +1,6 @@
-baseDir = "C:\Users\anton\Dev\ms-coco\ms-coco\images";
-trainZip = fullfile(baseDir, "train-resized.zip");
-testZip = fullfile(baseDir, "test-resized.zip");
+baseDir = "/Users/nellynguyen/Documents/INSA/4A/TIP/ms-coco/images";
 trainDir = fullfile(baseDir, "train");
 testDir = fullfile(baseDir, "test");
-
-% Décompresser les fichiers
-unzip(trainZip, trainDir);
-unzip(testZip, testDir);
 
 % Créer les imageDatastores
 imdsTrain = imageDatastore(trainDir, ...
