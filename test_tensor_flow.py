@@ -6,18 +6,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sys
 import io
+import json
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 # Chemins vers les dossiers d'images et de labels
 images_dir = 'C:/Users/anton/Dev/ms-coco/ms-coco/images/train/train-resized'
 labels_dir = 'C:/Users/anton/Dev/ms-coco/ms-coco/labels/train/train'
-
-#images_dir_test = 'C:/Users/anton/Dev/ms-coco/ms-coco/images/test/test-resized'
-#labels_dir_test = 'C:/Users/anton/Dev/ms-coco/ms-coco/labels/test/test'
-
-test_image_path = 'C:/Users/anton/Dev/ms-coco/ms-coco/images/test/test-resized/000000091619.jpg'
-
+images_dir_test = 'C:/Users/anton/Dev/ms-coco/ms-coco/images/test/test-resized'
 yaml_file = 'C:/Users/anton/Dev/ms-coco/ms-coco/coco.yaml'
 
 def yaml_to_list(yaml_file):
@@ -31,6 +27,9 @@ def parse_image_and_label(image_path, label_path, target_size=(224, 224), num_cl
     img = tf.io.read_file(image_path)
     img = tf.image.decode_jpeg(img, channels=3)
     img = tf.image.resize(img, target_size)
+    img = tf.image.random_flip_left_right(img)  # Flip horizontal aléatoire
+    img = tf.image.random_brightness(img, max_delta=0.1)  # Ajustement de la luminosité aléatoire
+    img = tf.image.random_contrast(img, lower=0.9, upper=1.1)  # Ajustement du contraste aléatoire
     img = tf.cast(img, tf.float32) / 255.0  # Normalisation
 
     # Charger les labels et les convertir en one-hot encoding
@@ -79,12 +78,10 @@ def load_and_preprocess_image(image_path, target_size=(224, 224)):
     img = tf.cast(img, tf.float32) / 255.0  # Normalisation
     return img
 
-
 def predictions_to_categories(predictions, categories, top_k=5):
     top_indices = np.argsort(predictions)[-top_k:][::-1]
     top_categories = [(categories[i], predictions[i]) for i in top_indices]
     return top_categories
-
 
 categories = yaml_to_list(yaml_file)
 num_classes = len(categories)
@@ -92,25 +89,18 @@ num_classes = len(categories)
 # Charger les données d'entraînement
 x_train, y_train = load_data(images_dir, labels_dir, sample_size=5000, num_classes=num_classes)
 
-
-# Pour vérifier que les labels attachés aux images d'entrainement sont bons
-# print("\nPremiers labels:", y_train[0])
-# categorie2 = print_image_categories(0, y_train, categories)
-# plt.imshow(x_train[0])  # Affiche la première image
-# plt.title(f"Labels: {categorie2}")
-# plt.show()
-
 # Définir le modèle
+base_model = tf.keras.applications.VGG16(input_shape=(224, 224, 3),
+                                         include_top=False,
+                                         weights='imagenet')
+
+base_model.trainable = False  # Geler les couches du modèle de base
+
 model = tf.keras.models.Sequential([
-    tf.keras.layers.Input(shape=(224, 224, 3)),
-    tf.keras.layers.Conv2D(32, (3, 3), activation='relu'),
-    tf.keras.layers.MaxPooling2D((2, 2)),
-    tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
-    tf.keras.layers.MaxPooling2D((2, 2)),
-    tf.keras.layers.Conv2D(128, (3, 3), activation='relu'),
-    tf.keras.layers.MaxPooling2D((2, 2)),
+    base_model,
     tf.keras.layers.Flatten(),
     tf.keras.layers.Dense(512, activation='relu'),
+    tf.keras.layers.Dropout(0.5),  # Ajouter du dropout pour la régularisation
     tf.keras.layers.Dense(num_classes, activation='sigmoid')  # Utiliser 'sigmoid' pour multi-label classification
 ])
 model.summary()
@@ -120,30 +110,51 @@ model.compile(optimizer='adam',
               loss='binary_crossentropy',  # Utiliser 'binary_crossentropy' pour multi-label classification
               metrics=['accuracy'])
 
-# Entraîner le modèle
-model.fit(x_train, y_train, epochs=10, batch_size=100)
+# Entraîner le modèle avec validation
+history = model.fit(x_train, y_train, epochs=2, batch_size=32, validation_split=0.2)
 
 # Sauvegarder le modèle
 model.save('model.h5')
 
+# Évaluer le modèle sur l'ensemble de validation
+val_loss, val_accuracy = model.evaluate(x_train, y_train)
+print(f"Validation Loss: {val_loss}, Validation Accuracy: {val_accuracy}")
 
-### Test du modèle avec l'image de test "test_image_path" ###
-# Charger et prétraiter l'image de test
-test_image = load_and_preprocess_image(test_image_path)
-test_image = np.expand_dims(test_image, axis=0)  # Ajouter une dimension pour le batch
+# Visualiser les courbes de perte et de précision
+plt.figure(figsize=(12, 4))
+plt.subplot(1, 2, 1)
+plt.plot(history.history['loss'], label='Train Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.legend()
+plt.title('Loss')
 
-# Faire une prédiction
-predictions = model.predict(test_image)
-print("Predictions:", predictions)
-its=predictions_to_categories(predictions[0], categories)
-print("Categories:", its)
+plt.subplot(1, 2, 2)
+plt.plot(history.history['accuracy'], label='Train Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+plt.legend()
+plt.title('Accuracy')
 
-# Afficher les résultats
-predicted_categories = print_image_categories(0, predictions, categories)
-print("Predicted Categories:", predicted_categories)
-plt.imshow(test_image[0])
-plt.title(f"Prédictions: {its}")
 plt.show()
 
+# Charger les images de test
+test_image_files = os.listdir(images_dir_test)
+predictions_dict = {}
 
+for image_file in test_image_files:
+    image_path = os.path.join(images_dir_test, image_file)
+    test_image = load_and_preprocess_image(image_path)
+    test_image = np.expand_dims(test_image, axis=0)  # Ajouter une dimension pour le batch
 
+    # Faire une prédiction
+    predictions = model.predict(test_image)
+    predicted_indices = np.where(predictions[0] > 0.5)[0]  # Seuil de 0.5 pour la classification multi-label
+
+    # Ajouter les prédictions au dictionnaire
+    image_id = os.path.splitext(image_file)[0]
+    predictions_dict[image_id] = predicted_indices.tolist()
+
+# Sauvegarder les prédictions dans un fichier JSON
+with open('predictions.json', 'w') as json_file:
+    json.dump(predictions_dict, json_file, indent=4)
+
+print("Predictions saved to predictions.json")
